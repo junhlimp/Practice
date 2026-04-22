@@ -396,10 +396,12 @@ def trend_coefficient(tr: TrendInputs) -> float:
 
 @st.cache_data(show_spinner=False)
 def build_internal(
-    df, date_col, store_col, brand_col,
+    source_key: str,  # cache discriminator — not used in body
+    _df, date_col, store_col, brand_col,
     sales_col, orders_col, floor_col, category_col,
 ):
-    x = df.copy()
+    del source_key  # only needed so @st.cache_data keys on it
+    x = _df.copy()
     x[date_col]   = pd.to_datetime(x[date_col], errors="coerce")
     x[sales_col]  = pd.to_numeric(x[sales_col], errors="coerce")
     x[orders_col] = pd.to_numeric(x[orders_col], errors="coerce")
@@ -649,6 +651,7 @@ def db_delete_actual(con, row_id: int):
 # 데이터 로드
 # ─────────────────────────────────────────
 
+@st.cache_data(show_spinner=False)
 def _generate_sample_data() -> pd.DataFrame:
     rng = np.random.default_rng(42)
     stores = ["잠실점", "본점", "영등포점", "인천점", "부산점"]
@@ -700,7 +703,9 @@ if missing:
     st.error(f"필수 컬럼 자동매핑 실패: {', '.join(missing)}")
     st.stop()
 
+_source_key = DEFAULT_XLSX if xlsx_path.exists() else "sample_v1"
 internal = build_internal(
+    _source_key,
     raw,
     mapped["date"], mapped["store"], mapped["brand"],
     mapped["sales"], mapped["orders"], mapped["floor"], mapped["category"],
@@ -1153,6 +1158,56 @@ with tab_actuals:
 # TAB 3 : 예측 vs 실적 비교
 # ════════════════════════════════════════════════
 
+@st.cache_data(show_spinner=False)
+def _compute_comparisons(_internal, source_key: str, actuals_hash: str, _actuals: pd.DataFrame) -> pd.DataFrame:
+    """actuals_hash가 바뀔 때만 재계산, 매 rerun 재계산 방지."""
+    del source_key, actuals_hash  # cache discriminators only
+    _actuals = _actuals.copy()
+    _actuals["기간(일)"] = (
+        pd.to_datetime(_actuals["end_date"]) - pd.to_datetime(_actuals["start_date"])
+    ).dt.days + 1
+    overall_c = float(_internal["overall"])
+    rows = []
+    for _, row in _actuals.iterrows():
+        r_store    = str(row["store"])
+        r_floor    = str(row["floor"])
+        r_cat      = str(row["category"])
+        r_brand_nm = str(row["brand"])
+        r_event    = str(row["event_type"])
+        r_s        = pd.to_datetime(row["start_date"]).date()
+        r_e        = pd.to_datetime(row["end_date"]).date()
+        actual_total = float(row["actual_total_sales"])
+        dur = int(row["기간(일)"])
+
+        baseline_c = float(_internal["cat_avg"].get(r_cat, _internal["overall"]))
+        store_w_c  = float(np.clip(float(_internal["store_avg"].get(r_store, overall_c)) / overall_c, 0.70, 1.60))
+        floor_w_c  = float(np.clip(float(_internal["floor_avg"].get(r_floor, overall_c)) / overall_c, 0.70, 1.60))
+        sc_w_c     = float(_internal["store_category_strength"].get((r_store, r_cat), 1.0))
+
+        b_name = r_brand_nm if r_brand_nm in _internal["brand_avg"] else None
+        brand_coef_c, _ = compute_brand_coef(_internal, b_name, r_cat, r_store, None)
+        wf_c = weekday_factor_for(_internal, b_name, r_cat)
+
+        df_c = compute_daily_forecast(
+            baseline_c, store_w_c, sc_w_c, floor_w_c,
+            wf_c, float(brand_coef_c), 1.0, r_s, r_e, r_event,
+        )
+        predicted_total = float(df_c["estimated_sales"].sum())
+        error_pct = (predicted_total - actual_total) / actual_total * 100 if actual_total else None
+
+        rows.append({
+            "id":        int(row["id"]),
+            "브랜드":    r_brand_nm,
+            "지점":      r_store,
+            "상품군":    r_cat,
+            "기간":      f"{r_s} ~ {r_e} ({dur}일)",
+            "실제 매출": actual_total,
+            "예측 매출": predicted_total,
+            "오차(%)":   round(error_pct, 1) if error_pct is not None else None,
+        })
+    return pd.DataFrame(rows)
+
+
 with tab_compare:
     con2     = db_connect()
     actuals2 = db_fetch_actuals(con2)
@@ -1165,59 +1220,15 @@ with tab_compare:
             unsafe_allow_html=True,
         )
     else:
-        actuals2["기간(일)"] = (
-            pd.to_datetime(actuals2["end_date"]) - pd.to_datetime(actuals2["start_date"])
-        ).dt.days + 1
-
-        cmp_rows = []
-        for _, row in actuals2.iterrows():
-            r_store    = str(row["store"])
-            r_floor    = str(row["floor"])
-            r_cat      = str(row["category"])
-            r_brand_nm = str(row["brand"])
-            r_event    = str(row["event_type"])
-            r_s        = pd.to_datetime(row["start_date"]).date()
-            r_e        = pd.to_datetime(row["end_date"]).date()
-            actual_total = float(row["actual_total_sales"])
-            dur = int(row["기간(일)"])
-
-            baseline_c = float(internal["cat_avg"].get(r_cat, internal["overall"]))
-            overall_c  = float(internal["overall"])
-            store_w_c  = float(np.clip(float(internal["store_avg"].get(r_store, overall_c)) / overall_c, 0.70, 1.60))
-            floor_w_c  = float(np.clip(float(internal["floor_avg"].get(r_floor, overall_c)) / overall_c, 0.70, 1.60))
-            sc_w_c     = float(internal["store_category_strength"].get((r_store, r_cat), 1.0))
-
-            b_name = r_brand_nm if r_brand_nm in internal["brand_avg"] else None
-            brand_coef_c, _ = compute_brand_coef(internal, b_name, r_cat, r_store, None)
-            wf_c = weekday_factor_for(internal, b_name, r_cat)
-
-            df_c = compute_daily_forecast(
-                baseline_c, store_w_c, sc_w_c, floor_w_c,
-                wf_c, float(brand_coef_c), 1.0,
-                r_s, r_e, r_event,
-            )
-            predicted_total = float(df_c["estimated_sales"].sum())
-            error_pct = (predicted_total - actual_total) / actual_total * 100 if actual_total else None
-
-            cmp_rows.append({
-                "id":        int(row["id"]),
-                "브랜드":    r_brand_nm,
-                "지점":      r_store,
-                "상품군":    r_cat,
-                "기간":      f"{r_s} ~ {r_e} ({dur}일)",
-                "실제 매출": actual_total,
-                "예측 매출": predicted_total,
-                "오차(%)":   round(error_pct, 1) if error_pct is not None else None,
-            })
-
-        cmp_df = pd.DataFrame(cmp_rows)
+        # actuals가 바뀐 경우에만 재계산 (id 목록으로 해시)
+        actuals_hash = "|".join(actuals2["id"].astype(str).tolist())
+        cmp_df = _compute_comparisons(internal, _source_key, actuals_hash, actuals2)
         valid_errors = cmp_df["오차(%)"].dropna()
 
         # ── 오차 KPI ──────────────────────────
         if len(valid_errors) > 0:
             mape      = float(valid_errors.abs().mean())
             mean_bias = float(valid_errors.mean())
-
             bias_color = SUCCESS if abs(mean_bias) < 10 else (WARN if abs(mean_bias) < 25 else DANGER)
             mape_color = SUCCESS if mape < 15 else (WARN if mape < 30 else DANGER)
 
