@@ -434,13 +434,51 @@ def db_delete_actual(con, row_id: int):
 # 데이터 로드
 # ─────────────────────────────────────────
 
-xlsx_path = Path(__file__).with_name(DEFAULT_XLSX)
-if not xlsx_path.exists():
-    st.error(f"데이터 파일을 찾지 못했습니다: {DEFAULT_XLSX}")
-    st.stop()
+def _generate_sample_data() -> pd.DataFrame:
+    rng = np.random.default_rng(42)
+    stores  = ["잠실점", "본점", "영등포점", "인천점", "부산점"]
+    floors  = ["B1", "1F", "2F", "3F", "4F", "5F", "6F"]
+    cats    = ["여성의류", "남성의류", "잡화", "화장품", "식품", "스포츠", "아동"]
+    brands  = {
+        "여성의류": ["지오다노", "유니클로", "자라", "H&M", "에잇세컨즈", "스파오"],
+        "남성의류": ["폴로", "타미힐피거", "라코스테", "닥스", "지이크"],
+        "잡화":    ["MCM", "루이비통", "구찌", "코치", "케이트스페이드"],
+        "화장품":  ["설화수", "헤라", "이니스프리", "MAC", "에스티로더"],
+        "식품":    ["파리바게뜨", "뚜레쥬르", "스타벅스", "투썸플레이스", "맥도날드"],
+        "스포츠":  ["나이키", "아디다스", "뉴발란스", "언더아머", "데상트"],
+        "아동":    ["베이비갭", "MLB키즈", "모이몰른", "젤리멜리", "폴로키즈"],
+    }
+    st_mult = {"잠실점": 1.3, "본점": 1.2, "영등포점": 1.0, "인천점": 0.9, "부산점": 0.95}
+    fl_mult = {"B1": 0.9, "1F": 1.2, "2F": 1.1, "3F": 1.0, "4F": 0.95, "5F": 0.9, "6F": 0.85}
+    wd_mult = [0.7, 0.75, 0.8, 0.85, 1.0, 1.4, 1.3]
 
-raw = pd.read_excel(xlsx_path, sheet_name=0)
-raw.columns = [str(c).strip() for c in raw.columns]
+    start = date(2024, 1, 1)
+    rows = []
+    for d_offset in range(456):  # ~15개월
+        d = start + timedelta(days=d_offset)
+        wd = d.weekday()
+        for store in stores:
+            fl = floors[rng.integers(0, len(floors))]
+            for cat in cats:
+                for brand in brands[cat]:
+                    base = int(rng.integers(300_000, 3_000_000))
+                    noise = float(rng.normal(1.0, 0.15))
+                    sales = max(10_000, int(base * st_mult[store] * fl_mult[fl] * wd_mult[wd] * noise))
+                    orders = max(1, int(sales / int(rng.integers(40_000, 120_000))))
+                    rows.append({
+                        "일자": d.strftime("%Y-%m-%d"),
+                        "지점": store, "층": fl, "상품군": cat,
+                        "브랜드": brand, "매출": sales, "구매건수": orders,
+                    })
+    return pd.DataFrame(rows)
+
+
+xlsx_path = Path(__file__).with_name(DEFAULT_XLSX)
+if xlsx_path.exists():
+    raw = pd.read_excel(xlsx_path, sheet_name=0)
+    raw.columns = [str(c).strip() for c in raw.columns]
+else:
+    raw = _generate_sample_data()
 
 mapped = auto_map_columns(raw)
 missing = [k for k, v in mapped.items() if v is None]
@@ -470,7 +508,7 @@ st.markdown(
     </div>
     <div class="card" style="min-width:260px;padding:14px;box-shadow:none;">
       <div style="font-size:12px;color:#6b7280;">데이터 소스</div>
-      <div style="font-weight:800;margin-top:6px;">{DEFAULT_XLSX}</div>
+      <div style="font-weight:800;margin-top:6px;">{"샘플 데이터 (자동 생성)" if not xlsx_path.exists() else DEFAULT_XLSX}</div>
       <div style="font-size:12px;color:#6b7280;margin-top:8px;">Rows {len(raw):,} · Cols {len(raw.columns):,} · 최신일 {internal["date_max"]}</div>
     </div>
   </div>
