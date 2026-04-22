@@ -774,8 +774,8 @@ with tab_forecast:
                 help="타이핑으로 필터링됩니다.",
             )
         else:
-            st.caption("ATV를 입력하면 유사 브랜드 실적으로 추정합니다.")
-            atv_for_new = st.number_input("신규 브랜드 ATV (원)", min_value=1_000.0, value=85_000.0, step=1_000.0)
+            st.caption("평균 건단가를 입력하면 유사 브랜드 실적으로 추정합니다.")
+            atv_for_new = float(st.number_input("평균 건단가 (원)", min_value=1_000, value=85_000, step=1_000))
 
         st.markdown('<div class="sidebar-section">운영 조건</div>', unsafe_allow_html=True)
         store_value = st.selectbox("지점", sorted(internal["store_avg"].keys()))
@@ -1035,7 +1035,7 @@ with tab_forecast:
             )
 
         if r_brand_type == "신규 브랜드" and not brand_details["peers"].empty:
-            with st.expander("유사 브랜드 풀 (ATV ±30%)"):
+            with st.expander("유사 브랜드 풀 (평균 건단가 ±30%)"):
                 st.dataframe(brand_details["peers"], use_container_width=True, hide_index=True)
 
 
