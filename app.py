@@ -284,7 +284,7 @@ div[data-testid="stTabs"] button {{
 # ─────────────────────────────────────────
 
 def format_krw(v: float) -> str:
-    return f"{int(round(float(v))):,} 원"
+    return f"{int(round(float(v) / 10) * 10):,} 원"
 
 
 def as_csv_download(df: pd.DataFrame) -> BytesIO:
@@ -575,7 +575,7 @@ def compute_daily_forecast(
             "weekday":          wd,
             "weekday_ko":       WEEKDAY_LABELS_KO[wd],
             "lifecycle_factor": round(lc, 4),
-            "estimated_sales":  float(round(sales, 0)),
+            "estimated_sales":  float(round(sales / 10) * 10),
         })
     return pd.DataFrame(rows)
 
